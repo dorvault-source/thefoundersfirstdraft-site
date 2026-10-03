@@ -62,7 +62,7 @@ p { margin: 0 0 1em; max-width: var(--measure); }
 .hero-photo img { width: 100%; max-width: 360px; max-height: 480px; object-fit: cover; object-position: 50% 20%; border-radius: 6px; box-shadow: 0 1px 0 var(--line); }
 
 /* Sticky note (cover motif) */
-.launch { display: inline-block; font-family: var(--hand); font-weight: 700; font-size: 1.25rem; line-height: 1.3; color: var(--navy); background: var(--note); padding: 18px 22px 16px; margin: 4px 0 26px; transform: rotate(-2deg); position: relative; box-shadow: 2px 3px 0 rgba(3,34,83,.08); max-width: 22ch; }
+.launch { display: inline-block; font-family: var(--hand); font-weight: 700; font-size: 1.25rem; line-height: 1.3; color: var(--navy); background: var(--note); padding: 18px 22px 16px; margin: 4px 0 26px; transform: rotate(-2deg); position: relative; box-shadow: 2px 3px 0 rgba(3,34,83,.08); max-width: 26ch; }
 .launch::before { content: ""; position: absolute; top: -10px; left: 50%; width: 64px; height: 18px; margin-left: -32px; background: var(--tape); opacity: .8; transform: rotate(3deg); }
 .page-head .launch { transform: none; font-size: 1.05rem; }
 
