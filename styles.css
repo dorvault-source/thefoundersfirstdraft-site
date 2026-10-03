@@ -139,3 +139,4 @@ p { margin: 0 0 1em; max-width: var(--measure); }
 @media (max-width: 860px) {
   .hero-photo img { max-width: 230px; max-height: 300px; }
 }
+.prose .listen { padding-left: 0; }
