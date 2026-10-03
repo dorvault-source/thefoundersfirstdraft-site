@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://thefoundersfirstdraft.com/sitemap.xml
