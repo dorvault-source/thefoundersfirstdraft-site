@@ -111,7 +111,7 @@ p { margin: 0 0 1em; max-width: var(--measure); }
 .steps li { counter-increment: s; position: relative; padding-left: 52px; margin-bottom: 22px; }
 .steps li::before { content: counter(s); position: absolute; left: 0; top: -2px; width: 36px; height: 36px; border-radius: 50%; background: var(--navy); color: var(--white); font-family: var(--display); font-weight: 800; display: grid; place-items: center; }
 .about-grid { display: grid; grid-template-columns: 1fr 320px; gap: 56px; align-items: start; }
-.about-grid img { width: 100%; border-radius: 6px; }
+.about-grid img { width: 100%; height: auto; border-radius: 6px; }
 .callout { background: var(--paper-light); border-left: 6px solid var(--teal); padding: 22px 24px; max-width: var(--measure); margin: 28px 0; }
 .callout p:last-child { margin-bottom: 0; }
 
