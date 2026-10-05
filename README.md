@@ -30,6 +30,8 @@ Hosted on GitHub Pages. Changes go live only after Nick approves them.
 - Every page is rendered and checked before anything is written. If a finished page still contains `{{` or `}}`, the build stops and writes nothing.
 - Every `episodes/*.html` except index.html is generated. If you delete or rename a data file, the build removes its old page.
 - An episode is released once its `date` is today or earlier. Only released episodes appear on episodes/index.html and in sitemap.xml, which the build also writes. Nothing else on the site names a guest.
+- Each episode page carries PodcastEpisode structured data: number, date, summary, duration, host, guest and company, the show, and the YouTube video once there is one. After launch, check one page with Google's Rich Results Test.
+- Before writing anything, the build also confirms that every unreleased episode page has `noindex` and that no other page or the sitemap mentions that episode's guest or address.
 - **The site only changes when you build and push.** On release morning, run `python3 build.py`, check `git diff`, then commit and push. A page built the night before still says `noindex` and isn't listed.
 - index.html is hand-written: its "Episode 1 drops Thursday, Oct 22" note needs a manual edit after launch.
 - `BUILD_DATE=2026-10-22 python3 build.py` previews the site as it will be on that day.

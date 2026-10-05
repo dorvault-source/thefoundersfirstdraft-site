@@ -302,16 +302,38 @@ def episode_page(ep):
     d = datetime.date.fromisoformat(ep["date"])
     title = f"{ep['guest']}, {ep['company']}: {ep['lesson']}"
     url = f"{SITE}/episodes/{ep['slug']}.html"
-    ld = ld_json({
+    h, m = divmod(ep["length_min"], 60)
+    duration = f"PT{h}H{m}M" if h else f"PT{m}M"
+    data = {
         "@context": "https://schema.org",
         "@type": "PodcastEpisode",
+        "@id": url,
+        "url": url,
         "name": title,
         "episodeNumber": ep["number"],
         "datePublished": ep["date"],
         "description": ep["summary"],
-        "url": url,
-        "partOfSeries": {"@type": "PodcastSeries", "name": "The Founder's First Draft", "url": f"{SITE}/"},
-    })
+        "duration": duration,
+        "inLanguage": "en",
+        "isAccessibleForFree": True,
+        "image": f"{SITE}/img/cover.jpg",
+        "author": {"@type": "Person", "name": "Nick Dorvault", "url": f"{SITE}/about.html"},
+        "actor": {"@type": "Person", "name": ep["guest"], "worksFor": {"@type": "Organization", "name": ep["company"]}},
+        "partOfSeries": {"@type": "PodcastSeries", "name": "The Founder's First Draft", "url": f"{SITE}/",
+                         "image": f"{SITE}/img/cover.jpg"},
+    }
+    if ep["youtube_id"]:
+        data["video"] = {
+            "@type": "VideoObject",
+            "name": title,
+            "description": ep["summary"],
+            "uploadDate": ep["date"],
+            "duration": duration,
+            "thumbnailUrl": f"https://i.ytimg.com/vi/{ep['youtube_id']}/hqdefault.jpg",
+            "contentUrl": f"https://www.youtube.com/watch?v={ep['youtube_id']}",
+            "embedUrl": f"https://www.youtube.com/embed/{ep['youtube_id']}",
+        }
+    ld = ld_json(data)
     video = (f'\n    <iframe class="player" style="aspect-ratio:16/9;height:auto" src="https://www.youtube-nocookie.com/embed/{esc(ep["youtube_id"])}" '
              f'title="{esc(ep["guest"])} on The Founder\'s First Draft" loading="lazy" allowfullscreen></iframe>') if ep["youtube_id"] else ""
     takeaways = "".join(f"<li>{esc(t)}</li>" for t in ep["takeaways"])
@@ -367,9 +389,18 @@ PAGES["sitemap.xml"] = f"""<?xml version="1.0" encoding="UTF-8"?>
               for ep in sorted(RELEASED, key=lambda ep: ep["number"])) + "</urlset>\n"
 
 # ---------- Check everything, then write ----------
-leftovers = [f"{out}: {m.group(0)!r}" for out, doc in PAGES.items() for m in re.finditer(r".{0,30}(\{\{|\}\}).{0,30}", doc)]
-if leftovers:
-    sys.exit("Build stopped; nothing was written. Leftover {{ }} placeholders:\n  " + "\n  ".join(leftovers))
+problems = [f"{out}: leftover placeholder {m.group(0)!r}" for out, doc in PAGES.items() for m in re.finditer(r".{0,30}(\{\{|\}\}).{0,30}", doc)]
+# Last line of defense for unreleased episodes: own page is noindex, and nothing else names them.
+for ep in EPISODES:
+    if released(ep):
+        continue
+    own = f"episodes/{ep['slug']}.html"
+    if '<meta name="robots" content="noindex">' not in PAGES[own]:
+        problems.append(f"{own}: not released yet but missing noindex")
+    name = re.compile(rf"\b({re.escape(ep['guest'])}|{re.escape(esc(ep['guest']))})\b|/{re.escape(ep['slug'])}\.html")
+    problems += [f"{out}: mentions unreleased episode {ep['slug']}" for out, doc in PAGES.items() if out != own and name.search(doc)]
+if problems:
+    sys.exit("Build stopped; nothing was written:\n  " + "\n  ".join(problems))
 for out, doc in PAGES.items():
     (ROOT / out).write_text(doc)
     print("wrote", out)
