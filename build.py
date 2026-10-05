@@ -2,7 +2,7 @@
 Run: python3 build.py   (index.html is hand-written; the header, footer, fonts,
 stylesheet tag and analytics snippet are all copied from it, so edit them there).
 404.html is hand-written too and is never touched: it needs root-absolute links."""
-import datetime, json, os, pathlib, re, sys
+import datetime, html, json, os, pathlib, re, sys
 
 ROOT = pathlib.Path(__file__).parent
 SITE = "https://thefoundersfirstdraft.com"
@@ -141,11 +141,23 @@ def head(title, desc, path, extra="", noindex=False):
 <body>
 """
 
+PAGES = {}  # out path -> finished HTML; nothing is written until every page has passed its checks
+
 def page(out, title, desc, path, nav_href, body, extra="", noindex=False):
     h = HEADER.replace(f'href="{nav_href}"', f'href="{nav_href}" aria-current="page"') if nav_href else HEADER
-    html = head(title, desc, path, extra, noindex) + h + "\n<main id=\"main\">\n" + body + "\n</main>\n\n" + FOOTER + "\n</body>\n</html>\n"
-    (ROOT / out).write_text(relativize(html, out))
-    print("wrote", out)
+    doc = head(title, desc, path, extra, noindex) + h + "\n<main id=\"main\">\n" + body + "\n</main>\n\n" + FOOTER + "\n</body>\n</html>\n"
+    PAGES[out] = relativize(doc, out)
+
+def esc(s):
+    """Escapes text for HTML. Apostrophes stay as they are: every attribute uses double quotes."""
+    return html.escape(s, quote=False).replace('"', "&quot;")
+
+def ld_json(data):
+    """JSON-LD that can't close its own <script> tag early."""
+    return '<script type="application/ld+json">\n' + json.dumps(data, indent=2, ensure_ascii=False).replace("</", "<\\/") + "\n</script>\n"
+
+def released(ep):
+    return datetime.date.fromisoformat(ep["date"]) <= TODAY
 
 LISTEN = """<ul class="listen">
           <li><a class="btn btn-primary" href="https://open.spotify.com/show/4vHqsm9LxcR3t2k3SPgh0b">Follow on Spotify</a></li>
@@ -257,45 +269,50 @@ page("newsletter.html",
     <p class="note">Or email <strong>nicholas@thefoundersfirstdraft.com</strong> with the subject "Add me."</p>
   </div></section>""")
 
-# ---------- Episode template (not linked; filled in each week) ----------
-EP_LD = """<script type="application/ld+json">
-{
-  "@context": "https://schema.org",
-  "@type": "PodcastEpisode",
-  "name": "{{EPISODE_TITLE}}",
-  "episodeNumber": "{{NUMBER}}",
-  "datePublished": "{{YYYY-MM-DD}}",
-  "description": "{{SUMMARY}}",
-  "url": "https://thefoundersfirstdraft.com/episodes/{{SLUG}}.html",
-  "partOfSeries": { "@type": "PodcastSeries", "name": "The Founder's First Draft", "url": "https://thefoundersfirstdraft.com/" }
-}
-</script>
-"""
-page("episodes/_episode-template.html",
-  "{{GUEST}}, {{COMPANY}}: {{LESSON}} | The Founder's First Draft",
-  "{{ONE-SENTENCE SUMMARY, ABOUT 150 CHARACTERS}}",
-  "/episodes/{{SLUG}}.html", "/episodes/index.html", f"""
+# ---------- One page per episode, from episodes/data/<slug>.json ----------
+# Pages for episodes whose date hasn't come yet are built for previewing, but carry
+# noindex and aren't linked from anywhere.
+def episode_page(ep):
+    d = datetime.date.fromisoformat(ep["date"])
+    title = f"{ep['guest']}, {ep['company']}: {ep['lesson']}"
+    url = f"{SITE}/episodes/{ep['slug']}.html"
+    ld = ld_json({
+        "@context": "https://schema.org",
+        "@type": "PodcastEpisode",
+        "name": title,
+        "episodeNumber": ep["number"],
+        "datePublished": ep["date"],
+        "description": ep["summary"],
+        "url": url,
+        "partOfSeries": {"@type": "PodcastSeries", "name": "The Founder's First Draft", "url": f"{SITE}/"},
+    })
+    video = (f'\n    <iframe class="player" style="aspect-ratio:16/9;height:auto" src="https://www.youtube-nocookie.com/embed/{esc(ep["youtube_id"])}" '
+             f'title="{esc(ep["guest"])} on The Founder\'s First Draft" loading="lazy" allowfullscreen></iframe>') if ep["youtube_id"] else ""
+    takeaways = "".join(f"<li>{esc(t)}</li>" for t in ep["takeaways"])
+    sections = f"""
+    <h2>What you'll learn</h2>
+    <ul>{takeaways}</ul>"""
+    if ep["timestamps"]:
+        sections += "\n    <h2>Timestamps</h2>\n    <ul>" + "".join(f"<li>{esc(ts['t'])} {esc(ts['topic'])}</li>" for ts in ep["timestamps"]) + "</ul>"
+    sections += f"\n    <h2>About {esc(ep['guest'])}</h2>\n    <p>{esc(ep['bio'])}</p>"
+    if ep["links"]:
+        sections += "\n    <h2>Links mentioned</h2>\n    <ul>" + "".join(f'<li><a href="{esc(ln["url"])}">{esc(ln["label"])}</a></li>' for ln in ep["links"]) + "</ul>"
+    sections += "\n    <h2>Transcript</h2>\n" + "\n".join(f"    <p>{esc(p)}</p>" for p in ep["transcript"])
+    page(f"episodes/{ep['slug']}.html",
+      esc(f"{title} | The Founder's First Draft"), esc(ep["summary"]),
+      f"/episodes/{ep['slug']}.html", "/episodes/index.html", f"""
   <section class="page-head"><div class="wrap">
-    <p class="launch">Episode {{{{NUMBER}}}}, {{{{DATE}}}}, {{{{LENGTH}}}} min</p>
-    <h1>{{{{GUEST}}}}, {{{{COMPANY}}}}: {{{{LESSON}}}}</h1>
+    <p class="launch">Episode {ep['number']}, {d:%b} {d.day}, {d.year}, {ep['length_min']} min</p>
+    <h1>{esc(title)}</h1>
     <span class="rule short" aria-hidden="true"></span>
-    <p class="lede">{{{{TWO OR THREE SENTENCE SUMMARY}}}}</p>
+    <p class="lede">{esc(ep['lede'])}</p>
     {LISTEN}
   </div></section>
-  <section class="prose"><div class="wrap">
-    <!-- YouTube embed: replace VIDEO_ID -->
-    <iframe class="player" style="aspect-ratio:16/9;height:auto" src="https://www.youtube-nocookie.com/embed/VIDEO_ID" title="{{{{GUEST}}}} on The Founder's First Draft" loading="lazy" allowfullscreen></iframe>
-    <h2>What you'll learn</h2>
-    <ul><li>{{{{TAKEAWAY 1}}}}</li><li>{{{{TAKEAWAY 2}}}}</li><li>{{{{TAKEAWAY 3}}}}</li></ul>
-    <h2>Timestamps</h2>
-    <ul><li>00:00 {{{{TOPIC}}}}</li></ul>
-    <h2>About {{{{GUEST}}}}</h2>
-    <p>{{{{GUEST BIO, 2 TO 3 SENTENCES, VERIFIED}}}}</p>
-    <h2>Links mentioned</h2>
-    <ul><li><a href="#">{{{{LINK}}}}</a></li></ul>
-    <h2>Transcript</h2>
-    <p>{{{{PASTE THE EDITED RIVERSIDE TRANSCRIPT}}}}</p>
-  </div></section>""", extra=EP_LD, noindex=True)
+  <section class="prose"><div class="wrap">{video}{sections}
+  </div></section>""", extra=ld, noindex=not released(ep))
+
+for ep in EPISODES:
+    episode_page(ep)
 
 # ---------- Privacy (same text as the live site) ----------
 page("privacy/index.html",
@@ -310,3 +327,16 @@ page("privacy/index.html",
     <p><a href="https://policies.google.com/technologies/partner-sites">Learn more about how Google uses information from sites that use its services.</a></p>
     <p><a href="/">Return to the home page</a></p>
   </div></section>""")
+
+# ---------- Check everything, then write ----------
+leftovers = [f"{out}: {m.group(0)!r}" for out, doc in PAGES.items() for m in re.finditer(r".{0,30}(\{\{|\}\}).{0,30}", doc)]
+if leftovers:
+    sys.exit("Build stopped; nothing was written. Leftover {{ }} placeholders:\n  " + "\n  ".join(leftovers))
+for out, doc in PAGES.items():
+    (ROOT / out).write_text(doc)
+    print("wrote", out)
+# Every episodes/*.html except index.html comes from a data file; remove pages whose file is gone.
+for f in sorted((ROOT / "episodes").glob("*.html")):
+    if f.name != "index.html" and f"episodes/{f.name}" not in PAGES:
+        f.unlink()
+        print("removed", f"episodes/{f.name}", "(no data file for it)")

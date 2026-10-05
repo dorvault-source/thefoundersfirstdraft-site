@@ -6,7 +6,6 @@ Hosted on GitHub Pages. Changes go live only after Nick approves them.
 - index.html: home
 - about.html: About Nick (copy is a draft in Nick's voice; Nick must approve every sentence)
 - episodes/index.html: pre-launch episodes page (switch to an episode list after Oct 22)
-- episodes/_episode-template.html: copy for each new episode (not linked from the site)
 - guest.html: Be a guest (email-based; no form tool yet)
 - newsletter.html: email-based "add me" until beehiiv is live
 - privacy/index.html: same text as the current live privacy page
@@ -27,6 +26,9 @@ Hosted on GitHub Pages. Changes go live only after Nick approves them.
 - **That folder is public.** The repo is public and GitHub Pages serves it, so a guest's file goes there only after the episode is recorded. Until then, keep it in `episodes/data/drafts/`, which git ignores (create the folder if it isn't there). The build refuses any public file with `"recorded": false`.
 - Fields: `number`, `slug` (must match the file name), `guest`, `company`, `lesson`, `summary` (about 150 characters, used for search results and social cards), `lede` (2 to 3 sentences under the title), `date` (release day, YYYY-MM-DD), `length_min`, `youtube_id` (the 11 characters after `v=`; may be `null` until release day), `takeaways` (list of sentences), `timestamps` (list of `{"t": "12:34", "topic": "..."}`), `bio`, `links` (list of `{"label": "...", "url": "https://..."}`), `transcript` (list of paragraphs), `recorded`.
 - If any file has a problem (missing or misspelled field, leftover `{{ }}`, bad date, a whole URL in `youtube_id`, and so on), the build lists every problem and writes nothing.
+- Each file becomes `episodes/<slug>.html`. Before its date, the page is built for previewing but carries `noindex` and isn't linked anywhere. Sections with nothing in them (no video yet, no timestamps, no links) are left out.
+- Every page is rendered and checked before anything is written. If a finished page still contains `{{` or `}}`, the build stops and writes nothing.
+- Every `episodes/*.html` except index.html is generated. If you delete or rename a data file, the build removes its old page.
 - `BUILD_DATE=2026-10-22 python3 build.py` previews the site as it will be on that day.
 
 ## Style
