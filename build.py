@@ -1,20 +1,44 @@
 """Builds the interior pages from one shared head/header/footer.
-Run: python3 build.py   (index.html is hand-written and shares the same header/footer)."""
+Run: python3 build.py   (index.html is hand-written; the header, footer, fonts,
+stylesheet tag and analytics snippet are all copied from it, so edit them there).
+404.html is hand-written too and is never touched: it needs root-absolute links."""
 import pathlib, re
 
 ROOT = pathlib.Path(__file__).parent
 SITE = "https://thefoundersfirstdraft.com"
 index = (ROOT / "index.html").read_text()
-HEADER = re.search(r'<a class="skip".*?</header>', index, re.S).group(0)
-FOOTER = re.search(r'<footer class="site-footer">.*?</footer>', index, re.S).group(0)
 
-def head(title, desc, path, extra=""):
+def absolutize(html):
+    """index.html sits at the root, so its relative links become root-absolute ones."""
+    return re.sub(r'(href|src)="(?![a-z]+:|/|#)([^"]*)"',
+                  lambda m: f'{m.group(1)}="/{"" if m.group(2) == "index.html" else m.group(2)}"', html)
+
+def relativize(html, out):
+    """Turns root-absolute links into relative ones so pages work on any host."""
+    pre = "../" * (len(pathlib.PurePosixPath(out).parts) - 1)
+    def fix(m):
+        attr, url = m.groups()
+        if url == "/": url = "index.html"
+        elif url.endswith("/"): url = url[1:] + "index.html"
+        elif url == "/privacy": url = "privacy/index.html"
+        else: url = url[1:]
+        return f'{attr}="{pre}{url}"'
+    return re.sub(r'(href|src)="(/(?!/)[^"]*)"', fix, html)
+
+HEADER = absolutize(re.search(r'<a class="skip".*?</header>', index, re.S).group(0))
+FOOTER = absolutize(re.search(r'<footer class="site-footer">.*?</footer>', index, re.S).group(0))
+FONTS = re.search(r'<link href="https://fonts\.googleapis\.com/css2[^>]*>', index).group(0)
+STYLESHEET = absolutize(re.search(r'<link rel="stylesheet"[^>]*>', index).group(0))
+ANALYTICS = re.search(r'<script async src="https://www\.googletagmanager\.com.*?</script>\n<script>.*?</script>', index, re.S).group(0)
+
+def head(title, desc, path, extra="", noindex=False):
+    robots = '<meta name="robots" content="noindex">\n' if noindex else ""
     return f"""<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{title}</title>
+{robots}<title>{title}</title>
 <meta name="description" content="{desc}">
 <link rel="canonical" href="{SITE}{path}">
 <meta property="og:type" content="website">
@@ -29,17 +53,17 @@ def head(title, desc, path, extra=""):
 <link rel="apple-touch-icon" href="/img/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;600;700&family=Roboto+Slab:wght@500;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/styles.css">
-<script async src="https://www.googletagmanager.com/gtag/js?id=G-2Q0HF4FX7N"></script>\n<script>window.dataLayer=window.dataLayer||[];function gtag(){{dataLayer.push(arguments);}}gtag('js',new Date());gtag('config','G-2Q0HF4FX7N');</script>
+{FONTS}
+{STYLESHEET}
+{ANALYTICS}
 {extra}</head>
 <body>
 """
 
-def page(out, title, desc, path, nav_href, body, extra=""):
+def page(out, title, desc, path, nav_href, body, extra="", noindex=False):
     h = HEADER.replace(f'href="{nav_href}"', f'href="{nav_href}" aria-current="page"') if nav_href else HEADER
-    html = head(title, desc, path, extra) + h + "\n<main id=\"main\">\n" + body + "\n</main>\n\n" + FOOTER + "\n</body>\n</html>\n"
-    (ROOT / out).write_text(html)
+    html = head(title, desc, path, extra, noindex) + h + "\n<main id=\"main\">\n" + body + "\n</main>\n\n" + FOOTER + "\n</body>\n</html>\n"
+    (ROOT / out).write_text(relativize(html, out))
     print("wrote", out)
 
 LISTEN = """<ul class="listen">
@@ -77,7 +101,7 @@ page("about.html",
 page("episodes/index.html",
   "Episodes | The Founder's First Draft",
   "Every episode of The Founder's First Draft: founders on how they actually started. New episodes every Thursday starting October 22, 2026.",
-  "/episodes/", "/episodes/", f"""
+  "/episodes/", "/episodes/index.html", f"""
   <section class="page-head"><div class="wrap">
     <h1>Episodes</h1>
     <span class="rule short" aria-hidden="true"></span>
@@ -122,8 +146,9 @@ page("guest.html",
       <li><strong>Share it easily.</strong> On release day you get a guest kit: short clips, ready-to-post captions and links.</li>
     </ol>
     <h2>Get in touch</h2>
-    <p>Email <a href="mailto:nicholas@thefoundersfirstdraft.com?subject=Guest%20idea%20for%20The%20Founder%27s%20First%20Draft">nicholas@thefoundersfirstdraft.com</a> with your name, your business, a link to your website or LinkedIn, and two or three sentences on how you got started.</p>
+    <p>Send your name, your business, a link to your website or LinkedIn, and two or three sentences on how you got started.</p>
     <p><a class="btn btn-primary" href="mailto:nicholas@thefoundersfirstdraft.com?subject=Guest%20idea%20for%20The%20Founder%27s%20First%20Draft">Email Nick</a></p>
+    <p class="note">Or copy the address: <strong>nicholas@thefoundersfirstdraft.com</strong></p>
   </div></section>""")
 
 # ---------- Newsletter ----------
@@ -145,9 +170,10 @@ page("newsletter.html",
     </ul>
     <!-- NEWSLETTER FORM: when beehiiv is live, replace this block with the beehiiv embed. -->
     <div class="callout">
-      <p><strong>The newsletter starts soon.</strong> Want the first issue? Email <a href="mailto:nicholas@thefoundersfirstdraft.com?subject=Add%20me%20to%20the%20newsletter">nicholas@thefoundersfirstdraft.com</a> with the subject "Add me" and you'll be on the list.</p>
+      <p><strong>The newsletter starts soon.</strong> Want the first issue? Tap the button below and send the email as is. You'll be on the list.</p>
     </div>
     <p><a class="btn btn-primary" href="mailto:nicholas@thefoundersfirstdraft.com?subject=Add%20me%20to%20the%20newsletter">Add me to the list</a></p>
+    <p class="note">Or email <strong>nicholas@thefoundersfirstdraft.com</strong> with the subject "Add me."</p>
   </div></section>""")
 
 # ---------- Episode template (not linked; filled in each week) ----------
@@ -167,7 +193,7 @@ EP_LD = """<script type="application/ld+json">
 page("episodes/_episode-template.html",
   "{{GUEST}}, {{COMPANY}}: {{LESSON}} | The Founder's First Draft",
   "{{ONE-SENTENCE SUMMARY, ABOUT 150 CHARACTERS}}",
-  "/episodes/{{SLUG}}.html", "/episodes/", f"""
+  "/episodes/{{SLUG}}.html", "/episodes/index.html", f"""
   <section class="page-head"><div class="wrap">
     <p class="launch">Episode {{{{NUMBER}}}}, {{{{DATE}}}}, {{{{LENGTH}}}} min</p>
     <h1>{{{{GUEST}}}}, {{{{COMPANY}}}}: {{{{LESSON}}}}</h1>
@@ -188,7 +214,7 @@ page("episodes/_episode-template.html",
     <ul><li><a href="#">{{{{LINK}}}}</a></li></ul>
     <h2>Transcript</h2>
     <p>{{{{PASTE THE EDITED RIVERSIDE TRANSCRIPT}}}}</p>
-  </div></section>""", extra=EP_LD)
+  </div></section>""", extra=EP_LD, noindex=True)
 
 # ---------- Privacy (same text as the live site) ----------
 page("privacy/index.html",
