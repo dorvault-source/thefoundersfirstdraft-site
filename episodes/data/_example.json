@@ -1,0 +1,31 @@
+{
+  "number": 1,
+  "slug": "example-guest-example-co",
+  "guest": "Example Guest",
+  "company": "Example Co",
+  "lesson": "Start before you feel ready",
+  "summary": "Example Guest on how Example Co started on nights and weekends, and the first step that made it real.",
+  "lede": "Two or three sentences that set up the conversation. This file is a format example and is never built into a page.",
+  "date": "2099-01-01",
+  "length_min": 52,
+  "youtube_id": null,
+  "takeaways": [
+    "First thing a listener will learn.",
+    "Second thing a listener will learn.",
+    "Third thing a listener will learn."
+  ],
+  "timestamps": [
+    { "t": "00:00", "topic": "Introduction" },
+    { "t": "04:30", "topic": "The first step" },
+    { "t": "1:02:15", "topic": "What they'd do differently" }
+  ],
+  "bio": "Two or three verified sentences about the guest.",
+  "links": [
+    { "label": "Example Co", "url": "https://example.com" }
+  ],
+  "transcript": [
+    "Each paragraph of the edited Riverside transcript is one string in this list.",
+    "Second paragraph."
+  ],
+  "recorded": true
+}

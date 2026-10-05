@@ -2,11 +2,92 @@
 Run: python3 build.py   (index.html is hand-written; the header, footer, fonts,
 stylesheet tag and analytics snippet are all copied from it, so edit them there).
 404.html is hand-written too and is never touched: it needs root-absolute links."""
-import pathlib, re
+import datetime, json, os, pathlib, re, sys
 
 ROOT = pathlib.Path(__file__).parent
 SITE = "https://thefoundersfirstdraft.com"
+# BUILD_DATE=YYYY-MM-DD previews the site as it will look on that day.
+TODAY = datetime.date.fromisoformat(os.environ.get("BUILD_DATE") or datetime.date.today().isoformat())
 index = (ROOT / "index.html").read_text()
+
+# ---------- Episode data ----------
+# One file per episode in episodes/data/<slug>.json. That folder is public (the repo
+# and the site both serve it), so only recorded episodes belong there. Unrecorded
+# guests go in episodes/data/drafts/, which git ignores. Files starting with _ are
+# examples: they are checked but never built.
+EPISODE_FIELDS = {
+    "number": int, "slug": str, "guest": str, "company": str, "lesson": str,
+    "summary": str, "lede": str, "date": str, "length_min": int, "youtube_id": (str, type(None)),
+    "takeaways": list, "timestamps": list, "bio": str, "links": list, "transcript": list,
+    "recorded": bool,
+}
+
+def check_episode(ep, name):
+    """Returns a list of problems with one episode's data (empty if it's fine)."""
+    errs = [f"missing field '{k}'" for k in EPISODE_FIELDS if k not in ep]
+    errs += [f"unknown field '{k}' (typo?)" for k in ep if k not in EPISODE_FIELDS]
+    for k, t in EPISODE_FIELDS.items():
+        if k in ep and (not isinstance(ep[k], t) or (t is int and isinstance(ep[k], bool))):
+            errs.append(f"'{k}' has the wrong type")
+    if errs:
+        return errs
+    for k, t in EPISODE_FIELDS.items():
+        if t is str and not ep[k].strip():
+            errs.append(f"'{k}' is empty")
+    if ep["recorded"] is not True:
+        errs.append("'recorded' is false: unrecorded guests must stay in episodes/data/drafts/, never in a public file")
+    if not re.fullmatch(r"[a-z0-9]+(-[a-z0-9]+)*", ep["slug"]):
+        errs.append("'slug' must be lowercase words joined by hyphens")
+    elif not name.startswith("_") and ep["slug"] != name:
+        errs.append(f"'slug' is '{ep['slug']}' but the file is named {name}.json")
+    if ep["number"] < 1: errs.append("'number' must be 1 or more")
+    if ep["length_min"] < 1: errs.append("'length_min' must be 1 or more")
+    if len(ep["summary"]) > 160: errs.append(f"'summary' is {len(ep['summary'])} characters; keep it near 150")
+    try:
+        released = datetime.date.fromisoformat(ep["date"]) <= TODAY
+    except ValueError:
+        errs.append("'date' must be YYYY-MM-DD"); released = False
+    if ep["youtube_id"] is None:
+        if released: errs.append("'youtube_id' is required once the episode is out")
+    elif not re.fullmatch(r"[A-Za-z0-9_-]{11}", ep["youtube_id"]):
+        errs.append("'youtube_id' should be the 11-character ID from the video URL, not the whole URL")
+    if not ep["takeaways"] or not all(isinstance(x, str) and x.strip() for x in ep["takeaways"]):
+        errs.append("'takeaways' must be a list of non-empty sentences")
+    if not ep["transcript"] or not all(isinstance(x, str) and x.strip() for x in ep["transcript"]):
+        errs.append("'transcript' must be a list of non-empty paragraphs")
+    for i, ts in enumerate(ep["timestamps"]):
+        if not (isinstance(ts, dict) and set(ts) == {"t", "topic"} and isinstance(ts["topic"], str) and ts["topic"].strip()
+                and isinstance(ts["t"], str) and re.fullmatch(r"(\d+:)?[0-5]?\d:[0-5]\d", ts["t"])):
+            errs.append(f"timestamps[{i}] must look like {{\"t\": \"12:34\", \"topic\": \"...\"}}")
+    for i, ln in enumerate(ep["links"]):
+        if not (isinstance(ln, dict) and set(ln) == {"label", "url"} and isinstance(ln["label"], str) and ln["label"].strip()
+                and isinstance(ln["url"], str) and re.fullmatch(r"https?://\S+", ln["url"])):
+            errs.append(f"links[{i}] must look like {{\"label\": \"...\", \"url\": \"https://...\"}}")
+    if "{{" in json.dumps(ep) or "}}" in json.dumps(ep):
+        errs.append("contains a leftover {{ }} placeholder")
+    return errs
+
+def load_episodes(data_dir=ROOT / "episodes" / "data"):
+    """Loads and checks every episode. Stops the build, listing every problem, if any file is bad."""
+    episodes, errors = [], []
+    for f in sorted(data_dir.glob("*.json")):
+        try:
+            ep = json.loads(f.read_text())
+        except json.JSONDecodeError as e:
+            errors.append(f"{f.name}: not valid JSON ({e})"); continue
+        if not isinstance(ep, dict):
+            errors.append(f"{f.name}: should be one {{...}} object"); continue
+        errors += [f"{f.name}: {e}" for e in check_episode(ep, f.stem)]
+        if not f.name.startswith("_"):
+            episodes.append(ep)
+    for k in ("number", "slug"):
+        seen = [ep.get(k) for ep in episodes]
+        errors += [f"two episodes share {k} {v!r}" for v in sorted({v for v in seen if seen.count(v) > 1}, key=str)]
+    if errors:
+        sys.exit("Build stopped; nothing was written. Fix these episode files first:\n  " + "\n  ".join(errors))
+    return sorted(episodes, key=lambda ep: ep["number"])
+
+EPISODES = load_episodes()
 
 def absolutize(html):
     """index.html sits at the root, so its relative links become root-absolute ones."""
