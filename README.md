@@ -5,7 +5,7 @@ Hosted on GitHub Pages. Changes go live only after Nick approves them.
 ## Pages
 - index.html: home
 - about.html: About Nick (copy is a draft in Nick's voice; Nick must approve every sentence)
-- episodes/index.html: pre-launch episodes page (switch to an episode list after Oct 22)
+- episodes/index.html: generated. Shows the pre-launch page until the first episode's date, then lists released episodes, newest first
 - guest.html: Be a guest (email-based; no form tool yet)
 - newsletter.html: email-based "add me" until beehiiv is live
 - privacy/index.html: same text as the current live privacy page
@@ -29,6 +29,9 @@ Hosted on GitHub Pages. Changes go live only after Nick approves them.
 - Each file becomes `episodes/<slug>.html`. Before its date, the page is built for previewing but carries `noindex` and isn't linked anywhere. Sections with nothing in them (no video yet, no timestamps, no links) are left out.
 - Every page is rendered and checked before anything is written. If a finished page still contains `{{` or `}}`, the build stops and writes nothing.
 - Every `episodes/*.html` except index.html is generated. If you delete or rename a data file, the build removes its old page.
+- An episode is released once its `date` is today or earlier. Only released episodes appear on episodes/index.html and in sitemap.xml, which the build also writes. Nothing else on the site names a guest.
+- **The site only changes when you build and push.** On release morning, run `python3 build.py`, check `git diff`, then commit and push. A page built the night before still says `noindex` and isn't listed.
+- index.html is hand-written: its "Episode 1 drops Thursday, Oct 22" note needs a manual edit after launch.
 - `BUILD_DATE=2026-10-22 python3 build.py` previews the site as it will be on that day.
 
 ## Style

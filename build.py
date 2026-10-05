@@ -141,7 +141,7 @@ def head(title, desc, path, extra="", noindex=False):
 <body>
 """
 
-PAGES = {}  # out path -> finished HTML; nothing is written until every page has passed its checks
+PAGES = {}  # out path -> finished file (pages and sitemap.xml); nothing is written until all have passed the checks
 
 def page(out, title, desc, path, nav_href, body, extra="", noindex=False):
     h = HEADER.replace(f'href="{nav_href}"', f'href="{nav_href}" aria-current="page"') if nav_href else HEADER
@@ -190,11 +190,22 @@ page("about.html",
     <img src="/img/nick.jpg" alt="Nick Dorvault" width="675" height="900">
   </div></section>""")
 
-# ---------- Episodes (pre-launch) ----------
-page("episodes/index.html",
-  "Episodes | The Founder's First Draft",
-  "Every episode of The Founder's First Draft: founders on how they actually started. New episodes every Thursday starting October 22, 2026.",
-  "/episodes/", "/episodes/index.html", f"""
+# ---------- Episodes ----------
+# Stays the pre-launch page until the first episode's date arrives, then lists every
+# released episode, newest first. Unreleased episodes are never listed.
+FOLLOW = """<p>Follow the show wherever you listen and new episodes show up on their own. Or join the newsletter for one lesson from each conversation.</p>
+    <ul class="listen" style="margin-bottom:28px">
+      <li><a class="btn btn-primary" href="https://open.spotify.com/show/4vHqsm9LxcR3t2k3SPgh0b">Follow on Spotify</a></li>
+      <li><a class="btn btn-dark" href="https://podcasts.apple.com/us/podcast/the-founders-first-draft/id6808995737">Apple Podcasts</a></li>
+      <li><a class="btn btn-dark" href="https://www.youtube.com/@TheFoundersFirstDraft">YouTube</a></li>
+      <li><a class="btn btn-dark" href="/newsletter.html">Newsletter</a></li>
+    </ul>"""
+RELEASED = sorted((ep for ep in EPISODES if released(ep)), key=lambda ep: ep["date"], reverse=True)
+if not RELEASED:
+    page("episodes/index.html",
+      "Episodes | The Founder's First Draft",
+      "Every episode of The Founder's First Draft: founders on how they actually started. New episodes every Thursday starting October 22, 2026.",
+      "/episodes/", "/episodes/index.html", f"""
   <section class="page-head"><div class="wrap">
     <h1>Episodes</h1>
     <span class="rule short" aria-hidden="true"></span>
@@ -202,15 +213,30 @@ page("episodes/index.html",
   </div></section>
   <section class="prose"><div class="wrap">
     <h2>Don't miss the first one</h2>
-    <p>Follow the show wherever you listen and new episodes show up on their own. Or join the newsletter for one lesson from each conversation.</p>
-    <ul class="listen" style="margin-bottom:28px">
-      <li><a class="btn btn-primary" href="https://open.spotify.com/show/4vHqsm9LxcR3t2k3SPgh0b">Follow on Spotify</a></li>
-      <li><a class="btn btn-dark" href="https://podcasts.apple.com/us/podcast/the-founders-first-draft/id6808995737">Apple Podcasts</a></li>
-      <li><a class="btn btn-dark" href="https://www.youtube.com/@TheFoundersFirstDraft">YouTube</a></li>
-      <li><a class="btn btn-dark" href="/newsletter.html">Newsletter</a></li>
-    </ul>
+    {FOLLOW}
     <h2>Listen to the trailer</h2>
     <iframe class="player" title="The Founder's First Draft on Spotify" src="https://open.spotify.com/embed/show/4vHqsm9LxcR3t2k3SPgh0b?utm_source=generator" height="232" loading="lazy" allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"></iframe>
+  </div></section>""")
+else:
+    def listing(ep):
+        d = datetime.date.fromisoformat(ep["date"])
+        return f"""    <h2><a href="/episodes/{ep['slug']}.html">{esc(ep['guest'])}, {esc(ep['company'])}: {esc(ep['lesson'])}</a></h2>
+    <p class="note">Episode {ep['number']} · {d:%b} {d.day}, {d.year} · {ep['length_min']} min</p>
+    <p>{esc(ep['summary'])}</p>"""
+    listings = "\n".join(listing(ep) for ep in RELEASED)
+    page("episodes/index.html",
+      "Episodes | The Founder's First Draft",
+      "Every episode of The Founder's First Draft: founders on how they actually started. A new episode every Thursday.",
+      "/episodes/", "/episodes/index.html", f"""
+  <section class="page-head"><div class="wrap">
+    <h1>Episodes</h1>
+    <span class="rule short" aria-hidden="true"></span>
+    <p class="lede">Founders on how they actually started. A new conversation every Thursday.</p>
+  </div></section>
+  <section class="prose"><div class="wrap">
+{listings}
+    <h2>Never miss one</h2>
+    {FOLLOW}
   </div></section>""")
 
 # ---------- Be a guest ----------
@@ -327,6 +353,18 @@ page("privacy/index.html",
     <p><a href="https://policies.google.com/technologies/partner-sites">Learn more about how Google uses information from sites that use its services.</a></p>
     <p><a href="/">Return to the home page</a></p>
   </div></section>""")
+
+# ---------- Sitemap: the fixed pages plus released episodes only ----------
+PAGES["sitemap.xml"] = f"""<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+<url><loc>{SITE}/</loc><changefreq>weekly</changefreq><priority>1.0</priority></url>
+<url><loc>{SITE}/episodes/</loc><changefreq>weekly</changefreq></url>
+<url><loc>{SITE}/about.html</loc></url>
+<url><loc>{SITE}/guest.html</loc></url>
+<url><loc>{SITE}/newsletter.html</loc></url>
+<url><loc>{SITE}/privacy/</loc><changefreq>yearly</changefreq></url>
+""" + "".join(f"<url><loc>{SITE}/episodes/{ep['slug']}.html</loc><lastmod>{ep['date']}</lastmod></url>\n"
+              for ep in sorted(RELEASED, key=lambda ep: ep["number"])) + "</urlset>\n"
 
 # ---------- Check everything, then write ----------
 leftovers = [f"{out}: {m.group(0)!r}" for out, doc in PAGES.items() for m in re.finditer(r".{0,30}(\{\{|\}\}).{0,30}", doc)]
