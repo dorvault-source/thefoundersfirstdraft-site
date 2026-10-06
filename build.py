@@ -1,20 +1,125 @@
 """Builds the interior pages from one shared head/header/footer.
-Run: python3 build.py   (index.html is hand-written and shares the same header/footer)."""
-import pathlib, re
+Run: python3 build.py   (index.html is hand-written; the header, footer, fonts,
+stylesheet tag and analytics snippet are all copied from it, so edit them there).
+404.html is hand-written too and is never touched: it needs root-absolute links."""
+import datetime, html, json, os, pathlib, re, sys
 
 ROOT = pathlib.Path(__file__).parent
 SITE = "https://thefoundersfirstdraft.com"
+# BUILD_DATE=YYYY-MM-DD previews the site as it will look on that day.
+TODAY = datetime.date.fromisoformat(os.environ.get("BUILD_DATE") or datetime.date.today().isoformat())
 index = (ROOT / "index.html").read_text()
-HEADER = re.search(r'<a class="skip".*?</header>', index, re.S).group(0)
-FOOTER = re.search(r'<footer class="site-footer">.*?</footer>', index, re.S).group(0)
 
-def head(title, desc, path, extra=""):
+# ---------- Episode data ----------
+# One file per episode in episodes/data/<slug>.json. That folder is public (the repo
+# and the site both serve it), so only recorded episodes belong there. Unrecorded
+# guests go in episodes/data/drafts/, which git ignores. Files starting with _ are
+# examples: they are checked but never built.
+EPISODE_FIELDS = {
+    "number": int, "slug": str, "guest": str, "company": str, "lesson": str,
+    "summary": str, "lede": str, "date": str, "length_min": int, "youtube_id": (str, type(None)),
+    "takeaways": list, "timestamps": list, "bio": str, "links": list, "transcript": list,
+    "recorded": bool,
+}
+
+def check_episode(ep, name):
+    """Returns a list of problems with one episode's data (empty if it's fine)."""
+    errs = [f"missing field '{k}'" for k in EPISODE_FIELDS if k not in ep]
+    errs += [f"unknown field '{k}' (typo?)" for k in ep if k not in EPISODE_FIELDS]
+    for k, t in EPISODE_FIELDS.items():
+        if k in ep and (not isinstance(ep[k], t) or (t is int and isinstance(ep[k], bool))):
+            errs.append(f"'{k}' has the wrong type")
+    if errs:
+        return errs
+    for k, t in EPISODE_FIELDS.items():
+        if t is str and not ep[k].strip():
+            errs.append(f"'{k}' is empty")
+    if ep["recorded"] is not True:
+        errs.append("'recorded' is false: unrecorded guests must stay in episodes/data/drafts/, never in a public file")
+    if not re.fullmatch(r"[a-z0-9]+(-[a-z0-9]+)*", ep["slug"]):
+        errs.append("'slug' must be lowercase words joined by hyphens")
+    elif not name.startswith("_") and ep["slug"] != name:
+        errs.append(f"'slug' is '{ep['slug']}' but the file is named {name}.json")
+    if ep["number"] < 1: errs.append("'number' must be 1 or more")
+    if ep["length_min"] < 1: errs.append("'length_min' must be 1 or more")
+    if len(ep["summary"]) > 160: errs.append(f"'summary' is {len(ep['summary'])} characters; keep it near 150")
+    try:
+        released = datetime.date.fromisoformat(ep["date"]) <= TODAY
+    except ValueError:
+        errs.append("'date' must be YYYY-MM-DD"); released = False
+    if ep["youtube_id"] is None:
+        if released: errs.append("'youtube_id' is required once the episode is out")
+    elif not re.fullmatch(r"[A-Za-z0-9_-]{11}", ep["youtube_id"]):
+        errs.append("'youtube_id' should be the 11-character ID from the video URL, not the whole URL")
+    if not ep["takeaways"] or not all(isinstance(x, str) and x.strip() for x in ep["takeaways"]):
+        errs.append("'takeaways' must be a list of non-empty sentences")
+    if not ep["transcript"] or not all(isinstance(x, str) and x.strip() for x in ep["transcript"]):
+        errs.append("'transcript' must be a list of non-empty paragraphs")
+    for i, ts in enumerate(ep["timestamps"]):
+        if not (isinstance(ts, dict) and set(ts) == {"t", "topic"} and isinstance(ts["topic"], str) and ts["topic"].strip()
+                and isinstance(ts["t"], str) and re.fullmatch(r"(\d+:)?[0-5]?\d:[0-5]\d", ts["t"])):
+            errs.append(f"timestamps[{i}] must look like {{\"t\": \"12:34\", \"topic\": \"...\"}}")
+    for i, ln in enumerate(ep["links"]):
+        if not (isinstance(ln, dict) and set(ln) == {"label", "url"} and isinstance(ln["label"], str) and ln["label"].strip()
+                and isinstance(ln["url"], str) and re.fullmatch(r"https?://\S+", ln["url"])):
+            errs.append(f"links[{i}] must look like {{\"label\": \"...\", \"url\": \"https://...\"}}")
+    if "{{" in json.dumps(ep) or "}}" in json.dumps(ep):
+        errs.append("contains a leftover {{ }} placeholder")
+    return errs
+
+def load_episodes(data_dir=ROOT / "episodes" / "data"):
+    """Loads and checks every episode. Stops the build, listing every problem, if any file is bad."""
+    episodes, errors = [], []
+    for f in sorted(data_dir.glob("*.json")):
+        try:
+            ep = json.loads(f.read_text())
+        except json.JSONDecodeError as e:
+            errors.append(f"{f.name}: not valid JSON ({e})"); continue
+        if not isinstance(ep, dict):
+            errors.append(f"{f.name}: should be one {{...}} object"); continue
+        errors += [f"{f.name}: {e}" for e in check_episode(ep, f.stem)]
+        if not f.name.startswith("_"):
+            episodes.append(ep)
+    for k in ("number", "slug"):
+        seen = [ep.get(k) for ep in episodes]
+        errors += [f"two episodes share {k} {v!r}" for v in sorted({v for v in seen if seen.count(v) > 1}, key=str)]
+    if errors:
+        sys.exit("Build stopped; nothing was written. Fix these episode files first:\n  " + "\n  ".join(errors))
+    return sorted(episodes, key=lambda ep: ep["number"])
+
+EPISODES = load_episodes()
+
+def absolutize(html):
+    """index.html sits at the root, so its relative links become root-absolute ones."""
+    return re.sub(r'(href|src)="(?![a-z]+:|/|#)([^"]*)"',
+                  lambda m: f'{m.group(1)}="/{"" if m.group(2) == "index.html" else m.group(2)}"', html)
+
+def relativize(html, out):
+    """Turns root-absolute links into relative ones so pages work on any host."""
+    pre = "../" * (len(pathlib.PurePosixPath(out).parts) - 1)
+    def fix(m):
+        attr, url = m.groups()
+        if url == "/": url = "index.html"
+        elif url.endswith("/"): url = url[1:] + "index.html"
+        elif url == "/privacy": url = "privacy/index.html"
+        else: url = url[1:]
+        return f'{attr}="{pre}{url}"'
+    return re.sub(r'(href|src)="(/(?!/)[^"]*)"', fix, html)
+
+HEADER = absolutize(re.search(r'<a class="skip".*?</header>', index, re.S).group(0))
+FOOTER = absolutize(re.search(r'<footer class="site-footer">.*?</footer>', index, re.S).group(0))
+FONTS = re.search(r'<link href="https://fonts\.googleapis\.com/css2[^>]*>', index).group(0)
+STYLESHEET = absolutize(re.search(r'<link rel="stylesheet"[^>]*>', index).group(0))
+ANALYTICS = re.search(r'<script async src="https://www\.googletagmanager\.com.*?</script>\n<script>.*?</script>', index, re.S).group(0)
+
+def head(title, desc, path, extra="", noindex=False):
+    robots = '<meta name="robots" content="noindex">\n' if noindex else ""
     return f"""<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{title}</title>
+{robots}<title>{title}</title>
 <meta name="description" content="{desc}">
 <link rel="canonical" href="{SITE}{path}">
 <meta property="og:type" content="website">
@@ -29,18 +134,30 @@ def head(title, desc, path, extra=""):
 <link rel="apple-touch-icon" href="/img/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;600;700&family=Roboto+Slab:wght@500;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/styles.css">
-<script async src="https://www.googletagmanager.com/gtag/js?id=G-2Q0HF4FX7N"></script>\n<script>window.dataLayer=window.dataLayer||[];function gtag(){{dataLayer.push(arguments);}}gtag('js',new Date());gtag('config','G-2Q0HF4FX7N');</script>
+{FONTS}
+{STYLESHEET}
+{ANALYTICS}
 {extra}</head>
 <body>
 """
 
-def page(out, title, desc, path, nav_href, body, extra=""):
+PAGES = {}  # out path -> finished file (pages and sitemap.xml); nothing is written until all have passed the checks
+
+def page(out, title, desc, path, nav_href, body, extra="", noindex=False):
     h = HEADER.replace(f'href="{nav_href}"', f'href="{nav_href}" aria-current="page"') if nav_href else HEADER
-    html = head(title, desc, path, extra) + h + "\n<main id=\"main\">\n" + body + "\n</main>\n\n" + FOOTER + "\n</body>\n</html>\n"
-    (ROOT / out).write_text(html)
-    print("wrote", out)
+    doc = head(title, desc, path, extra, noindex) + h + "\n<main id=\"main\">\n" + body + "\n</main>\n\n" + FOOTER + "\n</body>\n</html>\n"
+    PAGES[out] = relativize(doc, out)
+
+def esc(s):
+    """Escapes text for HTML. Apostrophes stay as they are: every attribute uses double quotes."""
+    return html.escape(s, quote=False).replace('"', "&quot;")
+
+def ld_json(data):
+    """JSON-LD that can't close its own <script> tag early."""
+    return '<script type="application/ld+json">\n' + json.dumps(data, indent=2, ensure_ascii=False).replace("</", "<\\/") + "\n</script>\n"
+
+def released(ep):
+    return datetime.date.fromisoformat(ep["date"]) <= TODAY
 
 LISTEN = """<ul class="listen">
           <li><a class="btn btn-primary" href="https://open.spotify.com/show/4vHqsm9LxcR3t2k3SPgh0b">Follow on Spotify</a></li>
@@ -73,11 +190,22 @@ page("about.html",
     <img src="/img/nick.jpg" alt="Nick Dorvault" width="675" height="900">
   </div></section>""")
 
-# ---------- Episodes (pre-launch) ----------
-page("episodes/index.html",
-  "Episodes | The Founder's First Draft",
-  "Every episode of The Founder's First Draft: founders on how they actually started. New episodes every Thursday starting October 22, 2026.",
-  "/episodes/", "/episodes/", f"""
+# ---------- Episodes ----------
+# Stays the pre-launch page until the first episode's date arrives, then lists every
+# released episode, newest first. Unreleased episodes are never listed.
+FOLLOW = """<p>Follow the show wherever you listen and new episodes show up on their own. Or join the newsletter for one lesson from each conversation.</p>
+    <ul class="listen" style="margin-bottom:28px">
+      <li><a class="btn btn-primary" href="https://open.spotify.com/show/4vHqsm9LxcR3t2k3SPgh0b">Follow on Spotify</a></li>
+      <li><a class="btn btn-dark" href="https://podcasts.apple.com/us/podcast/the-founders-first-draft/id6808995737">Apple Podcasts</a></li>
+      <li><a class="btn btn-dark" href="https://www.youtube.com/@TheFoundersFirstDraft">YouTube</a></li>
+      <li><a class="btn btn-dark" href="/newsletter.html">Newsletter</a></li>
+    </ul>"""
+RELEASED = sorted((ep for ep in EPISODES if released(ep)), key=lambda ep: ep["date"], reverse=True)
+if not RELEASED:
+    page("episodes/index.html",
+      "Episodes | The Founder's First Draft",
+      "Every episode of The Founder's First Draft: founders on how they actually started. New episodes every Thursday starting October 22, 2026.",
+      "/episodes/", "/episodes/index.html", f"""
   <section class="page-head"><div class="wrap">
     <h1>Episodes</h1>
     <span class="rule short" aria-hidden="true"></span>
@@ -85,15 +213,30 @@ page("episodes/index.html",
   </div></section>
   <section class="prose"><div class="wrap">
     <h2>Don't miss the first one</h2>
-    <p>Follow the show wherever you listen and new episodes show up on their own. Or join the newsletter for one lesson from each conversation.</p>
-    <ul class="listen" style="margin-bottom:28px">
-      <li><a class="btn btn-primary" href="https://open.spotify.com/show/4vHqsm9LxcR3t2k3SPgh0b">Follow on Spotify</a></li>
-      <li><a class="btn btn-dark" href="https://podcasts.apple.com/us/podcast/the-founders-first-draft/id6808995737">Apple Podcasts</a></li>
-      <li><a class="btn btn-dark" href="https://www.youtube.com/@TheFoundersFirstDraft">YouTube</a></li>
-      <li><a class="btn btn-dark" href="/newsletter.html">Newsletter</a></li>
-    </ul>
+    {FOLLOW}
     <h2>Listen to the trailer</h2>
     <iframe class="player" title="The Founder's First Draft on Spotify" src="https://open.spotify.com/embed/show/4vHqsm9LxcR3t2k3SPgh0b?utm_source=generator" height="232" loading="lazy" allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"></iframe>
+  </div></section>""")
+else:
+    def listing(ep):
+        d = datetime.date.fromisoformat(ep["date"])
+        return f"""    <h2><a href="/episodes/{ep['slug']}.html">{esc(ep['guest'])}, {esc(ep['company'])}: {esc(ep['lesson'])}</a></h2>
+    <p class="note">Episode {ep['number']} · {d:%b} {d.day}, {d.year} · {ep['length_min']} min</p>
+    <p>{esc(ep['summary'])}</p>"""
+    listings = "\n".join(listing(ep) for ep in RELEASED)
+    page("episodes/index.html",
+      "Episodes | The Founder's First Draft",
+      "Every episode of The Founder's First Draft: founders on how they actually started. A new episode every Thursday.",
+      "/episodes/", "/episodes/index.html", f"""
+  <section class="page-head"><div class="wrap">
+    <h1>Episodes</h1>
+    <span class="rule short" aria-hidden="true"></span>
+    <p class="lede">Founders on how they actually started. A new conversation every Thursday.</p>
+  </div></section>
+  <section class="prose"><div class="wrap">
+{listings}
+    <h2>Never miss one</h2>
+    {FOLLOW}
   </div></section>""")
 
 # ---------- Be a guest ----------
@@ -122,8 +265,9 @@ page("guest.html",
       <li><strong>Share it easily.</strong> On release day you get a guest kit: short clips, ready-to-post captions and links.</li>
     </ol>
     <h2>Get in touch</h2>
-    <p>Email <a href="mailto:nicholas@thefoundersfirstdraft.com?subject=Guest%20idea%20for%20The%20Founder%27s%20First%20Draft">nicholas@thefoundersfirstdraft.com</a> with your name, your business, a link to your website or LinkedIn, and two or three sentences on how you got started.</p>
+    <p>Send your name, your business, a link to your website or LinkedIn, and two or three sentences on how you got started.</p>
     <p><a class="btn btn-primary" href="mailto:nicholas@thefoundersfirstdraft.com?subject=Guest%20idea%20for%20The%20Founder%27s%20First%20Draft">Email Nick</a></p>
+    <p class="note">Or copy the address: <strong>nicholas@thefoundersfirstdraft.com</strong></p>
   </div></section>""")
 
 # ---------- Newsletter ----------
@@ -145,50 +289,78 @@ page("newsletter.html",
     </ul>
     <!-- NEWSLETTER FORM: when beehiiv is live, replace this block with the beehiiv embed. -->
     <div class="callout">
-      <p><strong>The newsletter starts soon.</strong> Want the first issue? Email <a href="mailto:nicholas@thefoundersfirstdraft.com?subject=Add%20me%20to%20the%20newsletter">nicholas@thefoundersfirstdraft.com</a> with the subject "Add me" and you'll be on the list.</p>
+      <p><strong>The newsletter starts soon.</strong> Want the first issue? Tap the button below and send the email as is. You'll be on the list.</p>
     </div>
     <p><a class="btn btn-primary" href="mailto:nicholas@thefoundersfirstdraft.com?subject=Add%20me%20to%20the%20newsletter">Add me to the list</a></p>
+    <p class="note">Or email <strong>nicholas@thefoundersfirstdraft.com</strong> with the subject "Add me."</p>
   </div></section>""")
 
-# ---------- Episode template (not linked; filled in each week) ----------
-EP_LD = """<script type="application/ld+json">
-{
-  "@context": "https://schema.org",
-  "@type": "PodcastEpisode",
-  "name": "{{EPISODE_TITLE}}",
-  "episodeNumber": "{{NUMBER}}",
-  "datePublished": "{{YYYY-MM-DD}}",
-  "description": "{{SUMMARY}}",
-  "url": "https://thefoundersfirstdraft.com/episodes/{{SLUG}}.html",
-  "partOfSeries": { "@type": "PodcastSeries", "name": "The Founder's First Draft", "url": "https://thefoundersfirstdraft.com/" }
-}
-</script>
-"""
-page("episodes/_episode-template.html",
-  "{{GUEST}}, {{COMPANY}}: {{LESSON}} | The Founder's First Draft",
-  "{{ONE-SENTENCE SUMMARY, ABOUT 150 CHARACTERS}}",
-  "/episodes/{{SLUG}}.html", "/episodes/", f"""
+# ---------- One page per episode, from episodes/data/<slug>.json ----------
+# Pages for episodes whose date hasn't come yet are built for previewing, but carry
+# noindex and aren't linked from anywhere.
+def episode_page(ep):
+    d = datetime.date.fromisoformat(ep["date"])
+    title = f"{ep['guest']}, {ep['company']}: {ep['lesson']}"
+    url = f"{SITE}/episodes/{ep['slug']}.html"
+    h, m = divmod(ep["length_min"], 60)
+    duration = f"PT{h}H{m}M" if h else f"PT{m}M"
+    data = {
+        "@context": "https://schema.org",
+        "@type": "PodcastEpisode",
+        "@id": url,
+        "url": url,
+        "name": title,
+        "episodeNumber": ep["number"],
+        "datePublished": ep["date"],
+        "description": ep["summary"],
+        "duration": duration,
+        "inLanguage": "en",
+        "isAccessibleForFree": True,
+        "image": f"{SITE}/img/cover.jpg",
+        "author": {"@type": "Person", "name": "Nick Dorvault", "url": f"{SITE}/about.html"},
+        "actor": {"@type": "Person", "name": ep["guest"], "worksFor": {"@type": "Organization", "name": ep["company"]}},
+        "partOfSeries": {"@type": "PodcastSeries", "name": "The Founder's First Draft", "url": f"{SITE}/",
+                         "image": f"{SITE}/img/cover.jpg"},
+    }
+    if ep["youtube_id"]:
+        data["video"] = {
+            "@type": "VideoObject",
+            "name": title,
+            "description": ep["summary"],
+            "uploadDate": ep["date"],
+            "duration": duration,
+            "thumbnailUrl": f"https://i.ytimg.com/vi/{ep['youtube_id']}/hqdefault.jpg",
+            "contentUrl": f"https://www.youtube.com/watch?v={ep['youtube_id']}",
+            "embedUrl": f"https://www.youtube.com/embed/{ep['youtube_id']}",
+        }
+    ld = ld_json(data)
+    video = (f'\n    <iframe class="player" style="aspect-ratio:16/9;height:auto" src="https://www.youtube-nocookie.com/embed/{esc(ep["youtube_id"])}" '
+             f'title="{esc(ep["guest"])} on The Founder\'s First Draft" loading="lazy" allowfullscreen></iframe>') if ep["youtube_id"] else ""
+    takeaways = "".join(f"<li>{esc(t)}</li>" for t in ep["takeaways"])
+    sections = f"""
+    <h2>What you'll learn</h2>
+    <ul>{takeaways}</ul>"""
+    if ep["timestamps"]:
+        sections += "\n    <h2>Timestamps</h2>\n    <ul>" + "".join(f"<li>{esc(ts['t'])} {esc(ts['topic'])}</li>" for ts in ep["timestamps"]) + "</ul>"
+    sections += f"\n    <h2>About {esc(ep['guest'])}</h2>\n    <p>{esc(ep['bio'])}</p>"
+    if ep["links"]:
+        sections += "\n    <h2>Links mentioned</h2>\n    <ul>" + "".join(f'<li><a href="{esc(ln["url"])}">{esc(ln["label"])}</a></li>' for ln in ep["links"]) + "</ul>"
+    sections += "\n    <h2>Transcript</h2>\n" + "\n".join(f"    <p>{esc(p)}</p>" for p in ep["transcript"])
+    page(f"episodes/{ep['slug']}.html",
+      esc(f"{title} | The Founder's First Draft"), esc(ep["summary"]),
+      f"/episodes/{ep['slug']}.html", "/episodes/index.html", f"""
   <section class="page-head"><div class="wrap">
-    <p class="launch">Episode {{{{NUMBER}}}}, {{{{DATE}}}}, {{{{LENGTH}}}} min</p>
-    <h1>{{{{GUEST}}}}, {{{{COMPANY}}}}: {{{{LESSON}}}}</h1>
+    <p class="launch">Episode {ep['number']}, {d:%b} {d.day}, {d.year}, {ep['length_min']} min</p>
+    <h1>{esc(title)}</h1>
     <span class="rule short" aria-hidden="true"></span>
-    <p class="lede">{{{{TWO OR THREE SENTENCE SUMMARY}}}}</p>
+    <p class="lede">{esc(ep['lede'])}</p>
     {LISTEN}
   </div></section>
-  <section class="prose"><div class="wrap">
-    <!-- YouTube embed: replace VIDEO_ID -->
-    <iframe class="player" style="aspect-ratio:16/9;height:auto" src="https://www.youtube-nocookie.com/embed/VIDEO_ID" title="{{{{GUEST}}}} on The Founder's First Draft" loading="lazy" allowfullscreen></iframe>
-    <h2>What you'll learn</h2>
-    <ul><li>{{{{TAKEAWAY 1}}}}</li><li>{{{{TAKEAWAY 2}}}}</li><li>{{{{TAKEAWAY 3}}}}</li></ul>
-    <h2>Timestamps</h2>
-    <ul><li>00:00 {{{{TOPIC}}}}</li></ul>
-    <h2>About {{{{GUEST}}}}</h2>
-    <p>{{{{GUEST BIO, 2 TO 3 SENTENCES, VERIFIED}}}}</p>
-    <h2>Links mentioned</h2>
-    <ul><li><a href="#">{{{{LINK}}}}</a></li></ul>
-    <h2>Transcript</h2>
-    <p>{{{{PASTE THE EDITED RIVERSIDE TRANSCRIPT}}}}</p>
-  </div></section>""", extra=EP_LD)
+  <section class="prose"><div class="wrap">{video}{sections}
+  </div></section>""", extra=ld, noindex=not released(ep))
+
+for ep in EPISODES:
+    episode_page(ep)
 
 # ---------- Privacy (same text as the live site) ----------
 page("privacy/index.html",
@@ -203,3 +375,37 @@ page("privacy/index.html",
     <p><a href="https://policies.google.com/technologies/partner-sites">Learn more about how Google uses information from sites that use its services.</a></p>
     <p><a href="/">Return to the home page</a></p>
   </div></section>""")
+
+# ---------- Sitemap: the fixed pages plus released episodes only ----------
+PAGES["sitemap.xml"] = f"""<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+<url><loc>{SITE}/</loc><changefreq>weekly</changefreq><priority>1.0</priority></url>
+<url><loc>{SITE}/episodes/</loc><changefreq>weekly</changefreq></url>
+<url><loc>{SITE}/about.html</loc></url>
+<url><loc>{SITE}/guest.html</loc></url>
+<url><loc>{SITE}/newsletter.html</loc></url>
+<url><loc>{SITE}/privacy/</loc><changefreq>yearly</changefreq></url>
+""" + "".join(f"<url><loc>{SITE}/episodes/{ep['slug']}.html</loc><lastmod>{ep['date']}</lastmod></url>\n"
+              for ep in sorted(RELEASED, key=lambda ep: ep["number"])) + "</urlset>\n"
+
+# ---------- Check everything, then write ----------
+problems = [f"{out}: leftover placeholder {m.group(0)!r}" for out, doc in PAGES.items() for m in re.finditer(r".{0,30}(\{\{|\}\}).{0,30}", doc)]
+# Last line of defense for unreleased episodes: own page is noindex, and nothing else names them.
+for ep in EPISODES:
+    if released(ep):
+        continue
+    own = f"episodes/{ep['slug']}.html"
+    if '<meta name="robots" content="noindex">' not in PAGES[own]:
+        problems.append(f"{own}: not released yet but missing noindex")
+    name = re.compile(rf"\b({re.escape(ep['guest'])}|{re.escape(esc(ep['guest']))})\b|/{re.escape(ep['slug'])}\.html")
+    problems += [f"{out}: mentions unreleased episode {ep['slug']}" for out, doc in PAGES.items() if out != own and name.search(doc)]
+if problems:
+    sys.exit("Build stopped; nothing was written:\n  " + "\n  ".join(problems))
+for out, doc in PAGES.items():
+    (ROOT / out).write_text(doc)
+    print("wrote", out)
+# Every episodes/*.html except index.html comes from a data file; remove pages whose file is gone.
+for f in sorted((ROOT / "episodes").glob("*.html")):
+    if f.name != "index.html" and f"episodes/{f.name}" not in PAGES:
+        f.unlink()
+        print("removed", f"episodes/{f.name}", "(no data file for it)")
